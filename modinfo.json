@@ -1,0 +1,17 @@
+{
+    "$schema": "https://moddbcdn.vintagestory.at/schema/modinfo.latest.json",
+    "type": "Code",
+    "side": "server",
+    "version": "1.0.0",
+    "modid": "hungertweaks",
+    "name": "HungerTweaks",
+    "authors": [
+        "GraveCatalyst"
+    ],
+    "description": "Server-side configurable action-based hunger multipliers + month-length scaling.",
+    "dependencies": {
+        "game": "1.21.0"
+    },
+    "requiredOnClient": false,
+    "requiredOnServer": true
+}
