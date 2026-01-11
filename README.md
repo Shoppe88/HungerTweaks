@@ -84,10 +84,11 @@ How the final drain is calculated
 BaseDrain is the % in your character sheet's "Hunger Rate %", convert it to decimal, so 100% = 1, 120% = 1.2, and so on.
  
 FinalDrain =    BaseDrain * GlobalMultiplier * MonthScale   * ActionMultiplier    * environment
-For example: 
-                BaseDrain *       .7         *     1        * 0.65(sleeping)      *      1       = BaseDrain * 0.455; this means when sleeping your hunger reduces about 54.5% slower than expected.
 
-                BaseDrain *       .7         *    .48       * 2.75(sprinting)     *      1       = BaseDrain * 0.924; This means when sprinting your hunger reduces about 7.6% slower than expected
+For example: 
+BaseDrain *       .7         *     1        * 0.65(sleeping)      *      1       = BaseDrain * 0.455; this means when sleeping your hunger reduces about 54.5% slower than expected.
+
+BaseDrain *       .7         *    .48       * 2.75(sprinting)     *      1       = BaseDrain * 0.924; This means when sprinting your hunger reduces about 7.6% slower than expected.
     (but in this case your MonthScale means your hunger rate is about 52% slower than expected, so while sprinting you are nearly doubling your hunger rate). 
 
 GlobalMultiplier recommendations (real-life hours per in-game month)
