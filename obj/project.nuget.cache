@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "B3ISxEX0Om8=",
+  "success": true,
+  "projectFilePath": "E:\\backup\\HungerTweaks\\HungerTweaks\\HungerTweaks.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\scott\\.nuget\\packages\\lib.harmony\\2.4.2\\lib.harmony.2.4.2.nupkg.sha512"
+  ],
+  "logs": []
+}

@@ -1,0 +1,13 @@
+E:\backup\HungerTweaks\HungerTweaks\bin\Release\Mods\mod\modinfo.json
+E:\backup\HungerTweaks\HungerTweaks\bin\Release\Mods\mod\HungerTweaks.deps.json
+E:\backup\HungerTweaks\HungerTweaks\bin\Release\Mods\mod\HungerTweaks.dll
+E:\backup\HungerTweaks\HungerTweaks\bin\Release\Mods\mod\HungerTweaks.pdb
+E:\backup\HungerTweaks\HungerTweaks\obj\Release\HungerTweaks.csproj.AssemblyReference.cache
+E:\backup\HungerTweaks\HungerTweaks\obj\Release\HungerTweaks.GeneratedMSBuildEditorConfig.editorconfig
+E:\backup\HungerTweaks\HungerTweaks\obj\Release\HungerTweaks.AssemblyInfoInputs.cache
+E:\backup\HungerTweaks\HungerTweaks\obj\Release\HungerTweaks.AssemblyInfo.cs
+E:\backup\HungerTweaks\HungerTweaks\obj\Release\HungerTweaks.csproj.CoreCompileInputs.cache
+E:\backup\HungerTweaks\HungerTweaks\obj\Release\HungerTweaks.dll
+E:\backup\HungerTweaks\HungerTweaks\obj\Release\refint\HungerTweaks.dll
+E:\backup\HungerTweaks\HungerTweaks\obj\Release\HungerTweaks.pdb
+E:\backup\HungerTweaks\HungerTweaks\obj\Release\ref\HungerTweaks.dll

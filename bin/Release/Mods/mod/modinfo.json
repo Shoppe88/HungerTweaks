@@ -2,7 +2,7 @@
     "$schema": "https://moddbcdn.vintagestory.at/schema/modinfo.latest.json",
     "type": "Code",
     "side": "server",
-    "version": "1.0.0",
+    "version": "1.0.6",
     "modid": "hungertweaks",
     "name": "HungerTweaks",
     "authors": [
