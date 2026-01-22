@@ -20,25 +20,37 @@ namespace HungerTweaks
 
         private sealed class InputState
         {
-            // RMB click detection
+            // RMB click detection (panning sampler)
             public bool LastRightDown;
-
-            // LMB click window fallback (weapon swing)
-            public bool LastLeftDown;
-            public long LastLeftPressMs;
 
             // Panning one-shot flag
             public bool PanningPending;
             public long PanningPendingSetMs;
 
-            // Weapon swing one-shot flag
+            // Weapon swing one-shot flag (non-work tools)
             public bool WeaponSwingPending;
             public long WeaponSwingPendingSetMs;
+
+            // Work-tool/action one-shot flags (set on actual server events)
+            public bool MiningPending;
+            public long MiningPendingSetMs;
+
+            public bool ChoppingPending;
+            public long ChoppingPendingSetMs;
+
+            public bool DiggingPending;
+            public long DiggingPendingSetMs;
+
+            public bool HammerUsePending;
+            public long HammerUsePendingSetMs;
+
+            public bool BowUsePending;
+            public long BowUsePendingSetMs;
         }
 
         private const long WeaponSwingPendingMaxMs = 3000;
 
-        // Called by ModSystem on a frequent interval (20ms) to catch quick RMB clicks.
+        // Called by ModSystem on a frequent interval (20ms) to catch quick RMB clicks for panning.
         public static void SampleAllPlayersForInputFlags(ICoreServerAPI sapi, HungerTweaksConfig cfg)
         {
             try
@@ -106,9 +118,9 @@ namespace HungerTweaks
             }
         }
 
-        // --- Weapon swing flag: set on actual server attack start ---
+        // --- Flag all attack-based actions on actual server attack start ---
         [HarmonyPatch(typeof(CollectibleObject), "OnHeldAttackStart")]
-        private static class WeaponSwingAttackStartPatch
+        private static class AttackStartFlagPatch
         {
             static void Prefix(CollectibleObject __instance, object[] __args)
             {
@@ -130,6 +142,41 @@ namespace HungerTweaks
                     var tool = __instance.Tool;
                     string itemCode = __instance.Code?.ToString() ?? "";
 
+                    long nowMs = sapi.World.ElapsedMilliseconds;
+                    var st = Input.GetOrAdd(plr.EntityId, _ => new InputState());
+
+                    // Work tools (previously required LMB hold at hunger-tick time).
+                    // Now: flag on attack start, consumed by next hunger tick.
+                    if (tool == EnumTool.Pickaxe || IsProPick(itemCode, tool))
+                    {
+                        st.MiningPending = true;
+                        st.MiningPendingSetMs = nowMs;
+                        return;
+                    }
+
+                    if (tool == EnumTool.Axe)
+                    {
+                        st.ChoppingPending = true;
+                        st.ChoppingPendingSetMs = nowMs;
+                        return;
+                    }
+
+                    if (tool == EnumTool.Shovel || IsShovel(itemCode, tool))
+                    {
+                        st.DiggingPending = true;
+                        st.DiggingPendingSetMs = nowMs;
+                        return;
+                    }
+
+                    if (tool == EnumTool.Hammer)
+                    {
+                        st.HammerUsePending = true;
+                        st.HammerUsePendingSetMs = nowMs;
+                        return;
+                    }
+
+                    // Not a work tool -> treat as weapon swing
+                    // (keeps existing behavior: set on actual server attack start).
                     bool isWorkTool =
                         tool == EnumTool.Pickaxe ||
                         tool == EnumTool.Axe ||
@@ -140,14 +187,55 @@ namespace HungerTweaks
 
                     if (isWorkTool) return;
 
-                    long nowMs = sapi.World.ElapsedMilliseconds;
-                    var st = Input.GetOrAdd(plr.EntityId, _ => new InputState());
                     st.WeaponSwingPending = true;
                     st.WeaponSwingPendingSetMs = nowMs;
                 }
                 catch
                 {
                     // never break attacks
+                }
+            }
+        }
+
+        // --- Flag bow/crossbow use on actual server interact start (RMB) ---
+        [HarmonyPatch(typeof(CollectibleObject), "OnHeldInteractStart")]
+        private static class InteractStartFlagPatch
+        {
+            static void Prefix(CollectibleObject __instance, object[] __args)
+            {
+                try
+                {
+                    var cfg = HungerTweaksModSystem.Config;
+                    var sapi = HungerTweaksModSystem.Sapi;
+                    if (cfg == null || sapi == null) return;
+
+                    EntityPlayer? plr = null;
+                    foreach (var a in __args)
+                    {
+                        if (a is EntityPlayer ep) { plr = ep; break; }
+                        if (a is EntityAgent ea && ea is EntityPlayer ep2) { plr = ep2; break; }
+                        if (a is IPlayer ip && ip.Entity is EntityPlayer ep3) { plr = ep3; break; }
+                    }
+                    if (plr == null) return;
+
+                    var tool = __instance.Tool;
+                    string itemCode = __instance.Code?.ToString() ?? "";
+
+                    bool isBowLike =
+                        tool == EnumTool.Bow ||
+                        (tool != null && tool.ToString().IndexOf("Crossbow", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                        (!string.IsNullOrWhiteSpace(itemCode) && itemCode.IndexOf("crossbow", StringComparison.OrdinalIgnoreCase) >= 0);
+
+                    if (!isBowLike) return;
+
+                    long nowMs = sapi.World.ElapsedMilliseconds;
+                    var st = Input.GetOrAdd(plr.EntityId, _ => new InputState());
+                    st.BowUsePending = true;
+                    st.BowUsePendingSetMs = nowMs;
+                }
+                catch
+                {
+                    // never break interacts
                 }
             }
         }
@@ -292,30 +380,13 @@ namespace HungerTweaks
 
             if (c.FloorSitting) return HungerAction.Sitting;
 
-            // Held tool + item code
-            EnumTool? tool = null;
-            string itemCode = "";
-            try
-            {
-                var slot = plr.ActiveHandItemSlot;
-                var coll = slot?.Itemstack?.Collectible;
-                if (coll != null)
-                {
-                    tool = coll.Tool;
-                    itemCode = coll.Code?.ToString() ?? "";
-                }
-            }
-            catch { }
-
             long nowMs = sapi.World.ElapsedMilliseconds;
             var st = Input.GetOrAdd(plr.EntityId, _ => new InputState());
 
-            // LMB click window fallback tracking
-            if (c.LeftMouseDown && !st.LastLeftDown)
-                st.LastLeftPressMs = nowMs;
-            st.LastLeftDown = c.LeftMouseDown;
+            // 1) One-shot flags (consumed once per hunger tick). These exist so short actions
+            //    don't need to align with the hunger tick timing.
 
-            // 1) Panning pending (one-shot) - consumes once
+            // Panning pending (one-shot) - consumes once
             if (st.PanningPending)
             {
                 if (nowMs - st.PanningPendingSetMs <= cfg.ActionMultipliers.PanningPendingMaxMs)
@@ -326,7 +397,7 @@ namespace HungerTweaks
                 st.PanningPending = false;
             }
 
-            // 2) Weapon swing pending (one-shot) - consumes once
+            // Weapon swing pending (one-shot) - consumes once
             if (st.WeaponSwingPending)
             {
                 if (nowMs - st.WeaponSwingPendingSetMs <= WeaponSwingPendingMaxMs)
@@ -337,7 +408,60 @@ namespace HungerTweaks
                 st.WeaponSwingPending = false;
             }
 
-            // 3) Swimming heuristic
+            // Work-tool/action pending flags
+            int actMax = cfg.ActionMultipliers.ActionPendingMaxMs;
+
+            if (st.MiningPending)
+            {
+                if (nowMs - st.MiningPendingSetMs <= actMax)
+                {
+                    st.MiningPending = false;
+                    return HungerAction.Mining;
+                }
+                st.MiningPending = false;
+            }
+
+            if (st.ChoppingPending)
+            {
+                if (nowMs - st.ChoppingPendingSetMs <= actMax)
+                {
+                    st.ChoppingPending = false;
+                    return HungerAction.Chopping;
+                }
+                st.ChoppingPending = false;
+            }
+
+            if (st.DiggingPending)
+            {
+                if (nowMs - st.DiggingPendingSetMs <= actMax)
+                {
+                    st.DiggingPending = false;
+                    return HungerAction.Digging;
+                }
+                st.DiggingPending = false;
+            }
+
+            if (st.HammerUsePending)
+            {
+                if (nowMs - st.HammerUsePendingSetMs <= actMax)
+                {
+                    st.HammerUsePending = false;
+                    return HungerAction.HammerUse;
+                }
+                st.HammerUsePending = false;
+            }
+
+            if (st.BowUsePending)
+            {
+                if (nowMs - st.BowUsePendingSetMs <= actMax)
+                {
+                    st.BowUsePending = false;
+                    return HungerAction.BowUse;
+                }
+                st.BowUsePending = false;
+            }
+
+            // 2) Swimming heuristic (state-based)
             bool inLiquid = plr.Swimming || plr.FeetInLiquid;
             if (inLiquid && IsWaterOrSeawaterAtOrBelowFeet(plr, sapi))
             {
@@ -345,36 +469,7 @@ namespace HungerTweaks
                     return HungerAction.Swimming;
             }
 
-            // 4) Bow
-            if (tool == EnumTool.Bow || (tool != null && tool.ToString().IndexOf("Crossbow", StringComparison.OrdinalIgnoreCase) >= 0))
-            {
-                if (c.IsAiming || c.RightMouseDown) return HungerAction.BowUse;
-            }
-
-            // 5) Work tools while holding LMB
-            if (c.LeftMouseDown)
-            {
-                if (tool == EnumTool.Pickaxe || IsProPick(itemCode, tool)) return HungerAction.Mining;
-                if (tool == EnumTool.Axe) return HungerAction.Chopping;
-                if (tool == EnumTool.Shovel || IsShovel(itemCode, tool)) return HungerAction.Digging;
-                if (tool == EnumTool.Hammer) return HungerAction.HammerUse;
-            }
-
-            // 6) Optional fallback weapon swing click window (exclude work tools)
-            if (nowMs - st.LastLeftPressMs <= cfg.ActionMultipliers.WeaponSwingClickWindowMs)
-            {
-                bool toolIsWorkTool =
-                    tool == EnumTool.Pickaxe ||
-                    tool == EnumTool.Axe ||
-                    tool == EnumTool.Hammer ||
-                    tool == EnumTool.Bow ||
-                    IsProPick(itemCode, tool) ||
-                    (tool == EnumTool.Shovel || IsShovel(itemCode, tool));
-
-                if (!toolIsWorkTool) return HungerAction.WeaponSwing;
-            }
-
-            // 7) Movement
+            // 3) Movement (state-based)
             if (c.TriesToMove && c.Sprint) return HungerAction.Sprinting;
             if (c.TriesToMove && c.Sneak) return HungerAction.Sneaking;
 

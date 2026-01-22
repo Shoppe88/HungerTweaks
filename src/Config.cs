@@ -67,6 +67,10 @@ namespace HungerTweaks
         // Your hunger ticks can be ~10s apart, so 30000ms is safe.
         public int PanningPendingMaxMs { get; set; } = 30000;
 
+        // Generic max time an action flag may wait for the next hunger tick before expiring.
+        // Use this for actions that are flagged on server events (mining/chopping/digging/hammer/bow-use).
+        public int ActionPendingMaxMs { get; set; } = 30000;
+
         public double Get(HungerAction action) => action switch
         {
             HungerAction.Sprinting => Sprinting,
