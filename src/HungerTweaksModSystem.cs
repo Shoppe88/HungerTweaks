@@ -35,11 +35,37 @@ namespace HungerTweaks
                 HungerPatches.SampleAllPlayersForInputFlags(Sapi, Config);
             }, 20);
 
+            // Cleanup per-player state on disconnect/leave to avoid unbounded dictionary growth.
+            api.Event.PlayerDisconnect += OnPlayerDisconnectOrLeave;
+            api.Event.PlayerLeave += OnPlayerDisconnectOrLeave;
+
             api.Logger.Notification("[HungerTweaks] Loaded. Config: VintagestoryData/ModConfig/hungertweaks.json");
+        }
+
+        private void OnPlayerDisconnectOrLeave(IServerPlayer player)
+        {
+            try
+            {
+                long entityId = player?.Entity?.EntityId ?? 0;
+                if (entityId != 0)
+                {
+                    HungerPatches.RemovePlayerState(entityId);
+                }
+            }
+            catch
+            {
+                // never break server events
+            }
         }
 
         public override void Dispose()
         {
+            if (Sapi != null)
+            {
+                Sapi.Event.PlayerDisconnect -= OnPlayerDisconnectOrLeave;
+                Sapi.Event.PlayerLeave -= OnPlayerDisconnectOrLeave;
+            }
+
             if (Sapi != null && inputSampleListenerId != 0)
             {
                 Sapi.Event.UnregisterGameTickListener(inputSampleListenerId);

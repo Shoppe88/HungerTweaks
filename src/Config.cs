@@ -56,6 +56,14 @@ namespace HungerTweaks
         public double HammerUse { get; set; } = 1.15;
         public double BowUse { get; set; } = 1.20;
 
+// Fire starter (one-shot flag on use; consumed on next hunger tick)
+public double FireStarting { get; set; } = 8.00;
+
+// Quern spinning (block interaction over time; refreshed while spinning)
+public double QuernGrinding { get; set; } = 2.25;
+public int QuernSpinHoldMs { get; set; } = 2000;     // must hold RMB this long before counting as "spinning"
+public int QuernFlagRefreshMs { get; set; } = 500;   // while spinning, refresh pending flag about twice per second
+
         // Weapon swing (flag + optional click-window fallback)
         public double WeaponSwing { get; set; } = 1.15;
         public int WeaponSwingClickWindowMs { get; set; } = 250;
@@ -87,6 +95,9 @@ namespace HungerTweaks
             HungerAction.Digging => Digging,
             HungerAction.HammerUse => HammerUse,
             HungerAction.BowUse => BowUse,
+HungerAction.FireStarting => FireStarting,
+HungerAction.QuernGrinding => QuernGrinding,
+
 
             HungerAction.WeaponSwing => WeaponSwing,
             HungerAction.Panning => Panning,
@@ -112,6 +123,8 @@ namespace HungerTweaks
         Digging,
         HammerUse,
         BowUse,
+        FireStarting,
+        QuernGrinding,
 
         WeaponSwing,
         Panning

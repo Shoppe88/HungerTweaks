@@ -16,6 +16,13 @@ namespace HungerTweaks
     {
         private static readonly ConcurrentDictionary<long, InputState> Input = new();
         private static readonly ConcurrentDictionary<long, long> LastPlayerDebugMs = new();
+
+        internal static void RemovePlayerState(long entityId)
+        {
+            Input.TryRemove(entityId, out _);
+            LastPlayerDebugMs.TryRemove(entityId, out _);
+        }
+
         private static long lastStormDebugMs = 0;
 
         private sealed class InputState
@@ -46,6 +53,23 @@ namespace HungerTweaks
 
             public bool BowUsePending;
             public long BowUsePendingSetMs;
+
+// Fire starter one-shot flag (set on held interact start)
+public bool FireStartingPending;
+public long FireStartingPendingSetMs;
+
+// Quern spinning (block interaction over time)
+public bool QuernInteracting;
+public int QuernX;
+public int QuernY;
+public int QuernZ;
+public long QuernInteractStartMs;
+public long QuernLastStepMs;
+public long QuernLastFlagSetMs;
+
+// Quern spinning one-shot flag (refreshed while spinning; consumed on hunger tick)
+public bool QuernGrindingPending;
+public long QuernGrindingPendingSetMs;
         }
 
         private const long WeaponSwingPendingMaxMs = 3000;
@@ -81,6 +105,74 @@ namespace HungerTweaks
                 bool rmb = c.RightMouseDown;
                 bool rmbClick = rmb && !st.LastRightDown;
                 st.LastRightDown = rmb;
+
+                // --- Quern spinning detection (RMB held on quern target) ---
+                // Uses server-side input sampling + current block selection, so it works even if the quern block overrides interaction methods.
+                try
+                {
+                    if (cfg?.ActionMultipliers != null && rmb)
+                    {
+                        var ip = plr.Player as IPlayer;
+                        var sel = ip?.CurrentBlockSelection;
+                        if (sel != null)
+                        {
+                            var blk = sapi.World.BlockAccessor.GetBlock(sel.Position);
+                            string blkPath = blk?.Code?.Path ?? "";
+                            // Match vanilla quern variants: quern-granite, quern-andesite, quern-basalt, quern-peridotite
+                            bool isQuern = blkPath.StartsWith("quern-", StringComparison.OrdinalIgnoreCase) ||
+                                           blkPath.Equals("quern", StringComparison.OrdinalIgnoreCase) ||
+                                           blkPath.IndexOf("quern", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                            if (isQuern)
+                            {
+                                // start / continue holding on this quern position
+                                if (!st.QuernInteracting || st.QuernX != sel.Position.X || st.QuernY != sel.Position.Y || st.QuernZ != sel.Position.Z)
+                                {
+                                    st.QuernInteracting = true;
+                                    st.QuernX = sel.Position.X;
+                                    st.QuernY = sel.Position.Y;
+                                    st.QuernZ = sel.Position.Z;
+                                    st.QuernInteractStartMs = nowMs;
+                                    st.QuernLastFlagSetMs = 0;
+                                }
+
+                                long holdMs = nowMs - st.QuernInteractStartMs;
+                                int holdThreshold = cfg.ActionMultipliers.QuernSpinHoldMs > 0 ? cfg.ActionMultipliers.QuernSpinHoldMs : 3000;
+                                int refreshMs = cfg.ActionMultipliers.QuernFlagRefreshMs > 0 ? cfg.ActionMultipliers.QuernFlagRefreshMs : 500;
+
+                                if (holdMs >= holdThreshold)
+                                {
+                                    if (st.QuernLastFlagSetMs == 0 || nowMs - st.QuernLastFlagSetMs >= refreshMs)
+                                    {
+                                        st.QuernGrindingPending = true;
+                                        st.QuernGrindingPendingSetMs = nowMs;
+                                        st.QuernLastFlagSetMs = nowMs;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // no longer targeting quern
+                                st.QuernInteracting = false;
+                                st.QuernLastFlagSetMs = 0;
+                            }
+                        }
+                        else
+                        {
+                            st.QuernInteracting = false;
+                            st.QuernLastFlagSetMs = 0;
+                        }
+                    }
+                    else if (!rmb)
+                    {
+                        // RMB not held
+                        st.QuernInteracting = false;
+                        st.QuernLastFlagSetMs = 0;
+                    }
+                }
+                catch { /* never break server tick */ }
+
+                // Panning detection uses RMB rising edge
                 if (!rmbClick) return;
 
                 // Read held item
@@ -221,18 +313,28 @@ namespace HungerTweaks
                     var tool = __instance.Tool;
                     string itemCode = __instance.Code?.ToString() ?? "";
 
+long nowMs = sapi.World.ElapsedMilliseconds;
+                    var st = Input.GetOrAdd(plr.EntityId, _ => new InputState());
+
+                    // Fire starter: flag on interact start (RMB use)
+                    if (!string.IsNullOrWhiteSpace(itemCode) &&
+                        itemCode.IndexOf("firestarter", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        st.FireStartingPending = true;
+                        st.FireStartingPendingSetMs = nowMs;
+                        return;
+                    }
+
                     bool isBowLike =
                         tool == EnumTool.Bow ||
-                        (tool != null && tool.ToString().IndexOf("Crossbow", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                        (tool.HasValue && tool.Value.ToString().IndexOf("Crossbow", StringComparison.OrdinalIgnoreCase) >= 0) ||
                         (!string.IsNullOrWhiteSpace(itemCode) && itemCode.IndexOf("crossbow", StringComparison.OrdinalIgnoreCase) >= 0);
 
                     if (!isBowLike) return;
 
-                    long nowMs = sapi.World.ElapsedMilliseconds;
-                    var st = Input.GetOrAdd(plr.EntityId, _ => new InputState());
                     st.BowUsePending = true;
                     st.BowUsePendingSetMs = nowMs;
-                }
+}
                 catch
                 {
                     // never break interacts
@@ -240,7 +342,215 @@ namespace HungerTweaks
             }
         }
 
-        // Patch ReduceSaturation(float ...) via reflection
+        
+// --- Quern spinning: flag only after holding RMB on a quern for some time ---
+// This avoids counting a quick open/close; the Step callback only fires while the interaction is held.
+[HarmonyPatch(typeof(Block), "OnBlockInteractStart")]
+private static class QuernBlockInteractStartPatch
+{
+    static void Prefix(Block __instance, object[] __args)
+    {
+        try
+        {
+            var cfg = HungerTweaksModSystem.Config;
+            var sapi = HungerTweaksModSystem.Sapi;
+            if (cfg == null || sapi == null) return;
+
+            string blockCode = __instance.Code?.ToString() ?? "";
+            if (blockCode.IndexOf("quern", StringComparison.OrdinalIgnoreCase) < 0) return;
+
+            IPlayer? ip = null;
+            BlockSelection? sel = null;
+
+            foreach (var a in __args)
+            {
+                if (ip == null && a is IPlayer p) ip = p;
+                else if (sel == null && a is BlockSelection bs) sel = bs;
+            }
+
+            if (ip?.Entity is not EntityPlayer plr) return;
+            if (sel == null) return;
+
+            long nowMs = sapi.World.ElapsedMilliseconds;
+            var st = Input.GetOrAdd(plr.EntityId, _ => new InputState());
+
+            st.QuernInteracting = true;
+            st.QuernX = sel.Position.X;
+            st.QuernY = sel.Position.Y;
+            st.QuernZ = sel.Position.Z;
+            st.QuernInteractStartMs = nowMs;
+            st.QuernLastStepMs = nowMs;
+            st.QuernLastFlagSetMs = 0;
+        }
+        catch
+        {
+            // never break interactions
+        }
+    }
+}
+
+[HarmonyPatch(typeof(Block), "OnBlockInteractStep")]
+private static class QuernBlockInteractStepPatch
+{
+    static void Prefix(Block __instance, object[] __args)
+    {
+        try
+        {
+            var cfg = HungerTweaksModSystem.Config;
+            var sapi = HungerTweaksModSystem.Sapi;
+            if (cfg == null || sapi == null) return;
+
+            string blockCode = __instance.Code?.ToString() ?? "";
+            if (blockCode.IndexOf("quern", StringComparison.OrdinalIgnoreCase) < 0) return;
+
+            IPlayer? ip = null;
+            BlockSelection? sel = null;
+
+            foreach (var a in __args)
+            {
+                if (ip == null && a is IPlayer p) ip = p;
+                else if (sel == null && a is BlockSelection bs) sel = bs;
+            }
+
+            if (ip?.Entity is not EntityPlayer plr) return;
+            if (sel == null) return;
+
+            long nowMs = sapi.World.ElapsedMilliseconds;
+            var st = Input.GetOrAdd(plr.EntityId, _ => new InputState());
+
+            int x = sel.Position.X;
+            int y = sel.Position.Y;
+            int z = sel.Position.Z;
+
+            // If this is a new quern interaction (or a different quern), reset the timer.
+            if (!st.QuernInteracting || st.QuernX != x || st.QuernY != y || st.QuernZ != z)
+            {
+                st.QuernInteracting = true;
+                st.QuernX = x;
+                st.QuernY = y;
+                st.QuernZ = z;
+                st.QuernInteractStartMs = nowMs;
+                st.QuernLastFlagSetMs = 0;
+            }
+
+            st.QuernLastStepMs = nowMs;
+
+            int holdMs = cfg.ActionMultipliers.QuernSpinHoldMs;
+            int refreshMs = cfg.ActionMultipliers.QuernFlagRefreshMs;
+
+            if (nowMs - st.QuernInteractStartMs < holdMs) return;
+
+            // While spinning, refresh a pending flag periodically so each hunger tick can consume it.
+            if (nowMs - st.QuernLastFlagSetMs >= refreshMs)
+            {
+                st.QuernGrindingPending = true;
+                st.QuernGrindingPendingSetMs = nowMs;
+                st.QuernLastFlagSetMs = nowMs;
+            }
+        }
+        catch
+        {
+            // never break interactions
+        }
+    }
+}
+
+
+// Clear quern interaction state when the player releases RMB or the interaction cancels.
+// We do not clear the pending hunger flag here; that should still be consumed on the next hunger tick.
+[HarmonyPatch(typeof(Block), "OnBlockInteractStop")]
+private static class QuernBlockInteractStopPatch
+{
+    static void Prefix(Block __instance, object[] __args)
+    {
+        try
+        {
+            var sapi = HungerTweaksModSystem.Sapi;
+            if (sapi == null) return;
+
+            string blockCode = __instance.Code?.ToString() ?? "";
+            if (blockCode.IndexOf("quern", StringComparison.OrdinalIgnoreCase) < 0) return;
+
+            IPlayer? ip = null;
+            BlockSelection? sel = null;
+
+            foreach (var a in __args)
+            {
+                if (ip == null && a is IPlayer p) ip = p;
+                else if (sel == null && a is BlockSelection bs) sel = bs;
+            }
+
+            if (ip?.Entity is not EntityPlayer plr) return;
+            if (sel == null) return;
+
+            long nowMs = sapi.World.ElapsedMilliseconds;
+            var st = Input.GetOrAdd(plr.EntityId, _ => new InputState());
+
+            int x = sel.Position.X;
+            int y = sel.Position.Y;
+            int z = sel.Position.Z;
+
+            if (st.QuernInteracting && st.QuernX == x && st.QuernY == y && st.QuernZ == z)
+            {
+                st.QuernInteracting = false;
+                st.QuernLastStepMs = nowMs;
+                st.QuernLastFlagSetMs = 0;
+            }
+        }
+        catch
+        {
+            // never break interactions
+        }
+    }
+}
+
+[HarmonyPatch(typeof(Block), "OnBlockInteractCancel")]
+private static class QuernBlockInteractCancelPatch
+{
+    static void Prefix(Block __instance, object[] __args)
+    {
+        try
+        {
+            var sapi = HungerTweaksModSystem.Sapi;
+            if (sapi == null) return;
+
+            string blockCode = __instance.Code?.ToString() ?? "";
+            if (blockCode.IndexOf("quern", StringComparison.OrdinalIgnoreCase) < 0) return;
+
+            IPlayer? ip = null;
+            BlockSelection? sel = null;
+
+            foreach (var a in __args)
+            {
+                if (ip == null && a is IPlayer p) ip = p;
+                else if (sel == null && a is BlockSelection bs) sel = bs;
+            }
+
+            if (ip?.Entity is not EntityPlayer plr) return;
+            if (sel == null) return;
+
+            long nowMs = sapi.World.ElapsedMilliseconds;
+            var st = Input.GetOrAdd(plr.EntityId, _ => new InputState());
+
+            int x = sel.Position.X;
+            int y = sel.Position.Y;
+            int z = sel.Position.Z;
+
+            if (st.QuernInteracting && st.QuernX == x && st.QuernY == y && st.QuernZ == z)
+            {
+                st.QuernInteracting = false;
+                st.QuernLastStepMs = nowMs;
+                st.QuernLastFlagSetMs = 0;
+            }
+        }
+        catch
+        {
+            // never break interactions
+        }
+    }
+}
+
+// Patch ReduceSaturation(float ...) via reflection
         private static MethodBase? TargetMethod()
         {
             var t = AccessTools.TypeByName("Vintagestory.GameContent.EntityBehaviorHunger");
@@ -460,6 +770,26 @@ namespace HungerTweaks
                 }
                 st.BowUsePending = false;
             }
+
+if (st.FireStartingPending)
+{
+    if (nowMs - st.FireStartingPendingSetMs <= actMax)
+    {
+        st.FireStartingPending = false;
+        return HungerAction.FireStarting;
+    }
+    st.FireStartingPending = false;
+}
+
+if (st.QuernGrindingPending)
+{
+    if (nowMs - st.QuernGrindingPendingSetMs <= actMax)
+    {
+        st.QuernGrindingPending = false;
+        return HungerAction.QuernGrinding;
+    }
+    st.QuernGrindingPending = false;
+}
 
             // 2) Swimming heuristic (state-based)
             bool inLiquid = plr.Swimming || plr.FeetInLiquid;
@@ -710,9 +1040,9 @@ namespace HungerTweaks
                 if (s.Contains("propick") || s.Contains("prospectingpick")) return true;
             }
 
-            if (tool != null)
+            if (tool.HasValue)
             {
-                var tn = tool.ToString().ToLowerInvariant();
+                var tn = tool.Value.ToString().ToLowerInvariant();
                 if (tn.Contains("propick") || tn.Contains("prospect")) return true;
             }
 
@@ -721,7 +1051,7 @@ namespace HungerTweaks
 
         private static bool IsShovel(string itemCode, EnumTool? tool)
         {
-            if (tool != null && tool.ToString().Equals("Shovel", StringComparison.OrdinalIgnoreCase))
+            if (tool.HasValue && tool.Value.ToString().Equals("Shovel", StringComparison.OrdinalIgnoreCase))
                 return true;
 
             if (!string.IsNullOrWhiteSpace(itemCode))
