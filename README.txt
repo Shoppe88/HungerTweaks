@@ -1,3 +1,8 @@
+To compile the mod:
+zip the files:
+    modinfo.json
+    HungerTweaks.dll
+
 HungerTweaks
 
 Server-side mod that lets you customize hunger/satiety drain for specific actions and (optionally) scale hunger to match your server’s real-time calendar settings.
